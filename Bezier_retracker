@@ -1,0 +1,165 @@
+% 贝塞尔曲线拟合波形重跟踪程序
+% Verison 2, 29/04/2019, Feynman.
+
+clear;
+%打开DBL文件夹
+path1 = uigetdir();
+filename1 = dir([path1,'\*.DBL']); %打开L1b文件夹
+path2 = uigetdir();
+filename2 = dir([path2,'\*.DBL']); %打开L2i文件夹
+path3 = uigetdir();
+%[SUCCESS,MESSAGE,MESSAGEID] = mkdir([path(1:3),'DBL2shape']);
+%创建存储.shp的文件夹
+Newdir = [path3(1:(end-6)),path3((end-5):end),'shape'];
+shpfilepath = mkdir(Newdir);       %打开存储文件的文件夹
+  
+%% hwait=waitbar(0,'Please wait...');  
+for jj = 1:length(filename1)      
+     index=[];
+     S=[];
+%waitbar(jj/length(filename),hwait)
+     disp(['正在处理',num2str(jj)]);
+     full_filename1=fullfile(path1,filename1(jj).name);
+     full_filename2=fullfile(path2,filename2(jj).name);
+ %读取.DBL数据 
+     [Header1,Data1] = Cryo_L1b_read(full_filename1);%打开L1b文件
+     [Header2,Data2] = Cryo_L2I_read(full_filename2);%打开L2I文件
+     
+     if ~isstruct(Data1)
+        continue;
+     else
+         
+     cow2 = size(Data1.GEO.H,2);
+     waves1 = reshape(Data1.SAR.data,256,20*cow2);
+     waves = zeros(256,20*cow2);
+     Data1.SAR.echo_scaling1 = reshape(Data1.SAR.echo_scaling,20*cow2,1);
+     Data1.SAR.echo_scale_power1 = reshape(Data1.SAR.echo_scale_power,20*cow2,1);
+     Data1.MEA.noise_power1 = reshape(Data1.MEA.noise_power,20*cow2,1);
+     cow1 = length(Data2.GEO.LAT);
+     leg = zeros(cow1,1);
+     
+     for k = 1:cow1
+         waves(:,k) = waves1(:,k) * Data1.SAR.echo_scaling1(k,1) * 1e-9 * 2^Data1.SAR.echo_scale_power1(k,1) - 10 ^ (0.1 * Data1.MEA.noise_power1(k,1));
+     end
+         %最终的波形，单位：功率
+     if ~isfield(Data2.GEO,'LON')
+         continue;
+     else
+         index=find(Data2.GEO.LAT>=60);      
+         if isempty(index)
+             continue;
+         else
+             Lat = Data2.GEO.LAT(index);     
+             Lon = Data2.GEO.LON(index);
+             MSS = Data2.MEA.Interpolated_Ocean_Height(index);
+             Freeboard = Data2.MEA.Freeboard(index);
+%              Inp_SSH = Data2.MEA.Interpolated_Ocean_Height(index);
+%              Inp_SSH_Ano = Data2.MEA.Interpolated_Sea_Surface_Height_Anomaly(index);
+%              Inp_SSH_Err = Data2.MEA.Ocean_Height_Interpolation_Error(index);
+             Ice_Concentration = Data2.AUX.Ice_Concentration(index);
+             Snow_Depth = Data2.AUX.Snow_Depth(index);
+             Snow_Density = Data2.AUX.Snow_Density(index);
+             Height = Data2.MEA.Height_over_surface_r1(index);
+             Sigma0 = Data2.MEA.Sigma0_r1(index);
+             RE_L2I = Data2.MEA.Retracked_Range_r1(index);
+             Clsaaify = Data2.AUX.Discriminator_Result(index);
+             Classify_F = Data2.AUX.SIN_Discriminator_Status_Flag.Overall_Discriminator_Failure(index);
+%              SSB = Data2.COR.SSB(index);
+             SAR_Unavailable = Data2.MEA.SAR_Freeboard_Status_Flag.Unavailable_Freeboard_Measurement(index);
+             SAR_Unreliable = Data2.MEA.SAR_Freeboard_Status_Flag.Unreliable_Freeboard_Measurement(index);                        
+             wavess=waves(:,index);
+             
+             for ii = 1:length(Lat)                             
+                 d2 = [];
+                 amp = max(wavess(:,ii));
+                 a = find(amp==(wavess(:,ii)));                           
+                 if (length(a) > 1)||(a == 1)||(a == 256)|| (amp <= 0)                   
+                     leg(ii) = 128;
+                 else                                         
+                 c2=zeros(2,3);
+                 c2(1,:)=a-1:a+1;
+                 c2(2,:)=wavess(a-1:a+1,ii);
+                 t=linspace(0,1,100);
+                 Q3D2=bezier(c2,t);              
+                 amp1 = max(Q3D2(2,:));
+                 if Clsaaify(ii) == 204
+                     mid_ecoh = 0.70*amp1;
+                 else
+                     mid_ecoh = 0.50*amp1;
+                 end                                                  
+                 mid_ecoh1 = 0.05*amp;
+                 gt_mid1 = find( wavess(:,ii) > mid_ecoh1);
+                 upleg1 = min(gt_mid1);                
+                 d2(1,:)=upleg1:a-1;
+                 d2(2,:)=wavess(upleg1:a-1,ii);
+                 t1=linspace(0,1,100);
+                 Q3D3=bezier(d2,t1);                   
+                 gt_mid = find( Q3D3(2,:) > mid_ecoh);
+                 upleg = min(gt_mid);                 
+                 if isempty(upleg)                                     
+                     gt_mid = find( Q3D2(2,:) > mid_ecoh);
+                     upleg = min(gt_mid);                                 
+                     if  upleg == 1                                       
+                         leg(ii) = 128;                 
+                     else                                                 
+                         if  Q3D2(1,upleg) == 1
+                             leg(ii) = 128;                                     
+                         else                         
+                         if  Q3D2(2,upleg) ~= Q3D2(2,upleg - 1)
+                         leg(ii) = Q3D2(1,upleg - 1) + (mid_ecoh -Q3D2(2,upleg - 1)) * (Q3D2(1,upleg) - Q3D2(1,upleg - 1)) /(Q3D2(2,upleg) - Q3D2(2,upleg - 1));                                             
+                         else
+                         leg(ii) = Q3D2(1,upleg - 1) ;                                             
+                         end                                                  
+                         end                                                  
+                     end                                          
+                 else                                                               
+                     if  upleg == 1                     
+                         leg(ii) = 128;                                      
+                     else                                                
+                         if  Q3D3(1,upleg) == 1                     
+                             leg(ii) = 128;                 
+                         else                             
+                             if  Q3D3(2,upleg) ~= Q3D3(2,upleg - 1)
+                         leg(ii) = Q3D3(1,upleg - 1) + (mid_ecoh -Q3D3(2,upleg - 1)) * (Q3D3(1,upleg) - Q3D3(1,upleg - 1)) /(Q3D3(2,upleg) - Q3D3(2,upleg - 1));                     
+                             else
+                         leg(ii) = Q3D3(1,upleg - 1) ;                     
+                             end                             
+                         end                         
+                     end                   
+                 end
+                 end
+                 [S(ii).Geometry] = deal('Point');
+                 S(ii).Lat = Lat(ii);
+                 S(ii).Lon = Lon(ii);
+                 S(ii).RE_b = (leg(ii) - 128).*0.234375;
+                 S(ii).MSS = MSS(ii);
+                 S(ii).Freeboard_L2I = Freeboard(ii);
+                 S(ii).Height_b = Height(ii) + RE_L2I(ii) - (leg(ii) - 128).*0.234375;
+%                  S(ii).Inp_SSH = Inp_SSH(ii);
+%                  S(ii).Inp_SSH_Ano = Inp_SSH_Ano(ii);
+%                  S(ii).Inp_SSH_Err = Inp_SSH_Err(ii);
+                 S(ii).Ice_Concentration = Ice_Concentration(ii);
+                 S(ii).Snow_Depth = Snow_Depth(ii);
+                 S(ii).Snow_Density = Snow_Density(ii);
+                 S(ii).Height_L2I = Height(ii);
+                 S(ii).Sigma0 = Sigma0(ii);
+                 S(ii).RE_L2I = RE_L2I(ii);                 
+                 S(ii).Clsaaify = Clsaaify(ii);
+                 S(ii).Classify_F = Classify_F(ii);
+%                  S(ii).SSB = SSB(ii);
+                 S(ii).SAR_Unavailable = SAR_Unavailable(ii);
+                 S(ii).SAR_Unreliable = SAR_Unreliable(ii);
+                 S(ii).LAT = Lat(ii);
+                 S(ii).LON = Lon(ii);                 
+             end
+             shpfilename = [Newdir,'\' filename1(jj,1).name(20:50),'.shp'];
+             存储.shp文件
+             if ~isempty(S)
+                 shapewrite(S,shpfilename);
+             else
+             continue;
+             end             
+         end
+     end    
+     end
+end
